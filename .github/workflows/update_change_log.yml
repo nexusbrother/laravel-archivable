@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.release.target_commitish }}
@@ -34,7 +34,7 @@ jobs:
           compare-url-target-revision: ${{ github.event.release.target_commitish }}
 
       - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           branch: ${{ github.event.release.target_commitish }}
           commit_message: "Update CHANGELOG.md"
