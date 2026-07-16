@@ -80,10 +80,10 @@ class ArchiveCommand extends Command
         $progressBar = null;
         $output = $this->output;
 
-        $onStart = function (int $total) use ($output, &$progressBar) {
-            $this->newLine();
+        $onStart = function (int $total) use ($output, $model, &$progressBar) {
+            $shortName = (new \ReflectionClass($model))->getShortName();
             $progressBar = new ProgressBar($output, $total);
-            $progressBar->setFormat(' %current%/%max% [%bar%] %percent:3s%%');
+            $progressBar->setFormat("  <fg=yellow>▸</> <comment>{$shortName}</comment>  %current%/%max% [%bar%] %percent:3s%%");
             $progressBar->setBarCharacter('▓');
             $progressBar->setEmptyBarCharacter('░');
             $progressBar->setProgressCharacter('▓');
