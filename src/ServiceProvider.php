@@ -3,12 +3,11 @@
 namespace Nexusbrother\Archivable;
 
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Contracts\Support\DeferrableProvider;
 use Illuminate\Support\ServiceProvider as BaseServiceProvider;
 use Nexusbrother\Archivable\Console\ArchiveCommand;
 use Nexusbrother\Archivable\Console\TableStructureSyncCommand;
 
-class ServiceProvider extends BaseServiceProvider implements DeferrableProvider
+class ServiceProvider extends BaseServiceProvider
 {
     /**
      * Register the service provider.
