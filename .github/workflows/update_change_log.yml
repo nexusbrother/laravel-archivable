@@ -1,11 +1,11 @@
 name: Update Changelog
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'CHANGELOG.md'
+  release:
+    types: [released]
+
+permissions:
+  contents: write
 
 jobs:
   update:
@@ -16,19 +16,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.release.target_commitish }}
 
-      - name: Update changelog
-        uses: laravel/changelog-updater-action@v1
+      - name: Extract release date
+        id: release_date
+        run: |
+          TIMESTAMP=$(git log -1 --date=unix --format=%ad '${{ github.event.release.tag_name }}')
+          FORMATTED=$(date -u -d @$TIMESTAMP +%Y-%m-%d)
+          echo "date=$FORMATTED" >> $GITHUB_OUTPUT
+
+      - name: Update Changelog
+        uses: stefanzweifel/changelog-updater-action@v1
+        with:
+          release-date: ${{ steps.release_date.outputs.date }}
+          release-notes: ${{ github.event.release.body }}
+          latest-version: ${{ github.event.release.tag_name }}
+          compare-url-target-revision: ${{ github.event.release.target_commitish }}
 
       - name: Commit changes
-        run: |
-          git config --global user.name "Laravel Bot"
-          git config --global user.email "bot@laravel.com"
-          git add CHANGELOG.md
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update changelog"
-
-      - name: Push changes
-        uses: ad-m/github-push-action@master
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          branch: main
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.event.release.target_commitish }}
+          commit_message: "Update CHANGELOG.md"
+          file_pattern: CHANGELOG.md
