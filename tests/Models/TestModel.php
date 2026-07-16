@@ -13,6 +13,6 @@ class TestModel extends Model
 
     public function getDestinationTable()
     {
-        return 'test_models_' . now()->format('Ym');
+        return 'test_models_'.now()->format('Ym');
     }
 }

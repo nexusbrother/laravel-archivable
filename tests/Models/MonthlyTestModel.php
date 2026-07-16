@@ -8,5 +8,6 @@ use Nexusbrother\Archivable\MonthlyArchivable;
 class MonthlyTestModel extends Model
 {
     use MonthlyArchivable;
+
     protected $table = 'monthly_test_models';
 }

@@ -2,9 +2,9 @@
 
 namespace Nexusbrother\Archivable;
 
+use Closure;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Log;
 
 trait MonthlyArchivable
 {
@@ -12,8 +12,6 @@ trait MonthlyArchivable
 
     /**
      * 按月份备份的时间依据字段
-     *
-     * @return string
      */
     public function getDateField(): string
     {
@@ -43,13 +41,12 @@ trait MonthlyArchivable
     /**
      * 根据日期生成归档表名
      *
-     * @param $date
      *
      * @return string
      */
     public function getDestinationTableByDate($date)
     {
-        return $this->getTable() . '_' . $date->format('Ym');
+        return $this->getTable().'_'.$date->format('Ym');
     }
 
     /**
@@ -71,29 +68,37 @@ trait MonthlyArchivable
     }
 
     /**
-     * 归档当前可归档数据
+     * 归档当前可归档数据（按月份分表）。
      *
-     * @return int
+     * @param  int|null  $chunkSize  每批处理条数
+     * @param  \Closure|null  $onChunkArchived  每批完成后的回调
+     * @param  \Closure|null  $onStart  开始归档前的回调
+     * @return int 实际归档条数
      *
      * @throws \Throwable
      */
-    public function archiveAll(?int $chunkSize = null)
+    public function archiveAll(?int $chunkSize = null, ?Closure $onChunkArchived = null, ?Closure $onStart = null)
     {
         $chunkSize = $chunkSize ?? config('archive.default_chunk_size');
-        $total     = $this->archivable()->count();
+        $total = $this->archivable()->count();
         if ($total == 0) {
             return 0;
         }
 
-        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=0;'); // 禁用外健检查
+        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=0;');
+
         $dates = $this->archivable()
             ->groupByRaw("date_format( {$this->getDateField()},'%Y-%m')")
             ->selectRaw("date_format({$this->getDateField()},'%Y-%m') as date")
             ->pluck('date');
 
+        if ($onStart) {
+            $onStart($total);
+        }
+
         $totalArchived = 0;
         foreach ($dates as $date) {
-            $dateObj          = Carbon::parse($date);
+            $dateObj = Carbon::parse($date);
             $archiveTableName = $this->getDestinationTableByDate($dateObj);
             $this->makeSureDestinationTableExists($archiveTableName);
 
@@ -103,20 +108,28 @@ trait MonthlyArchivable
                     ->where($this->getDateField(), '<', $dateObj->copy()->addMonth()->toDateTimeString())
                     ->limit($chunkSize)
                     ->get();
+
                 if ($data->isEmpty()) {
                     break;
                 }
+
                 $this->getArchiveDB()->table($archiveTableName)->insertOrIgnore($data->map->getAttributes()->all());
-                $totalArchived += $this->archivable()->whereIn($this->getKeyName(), $data->pluck($this->getKeyName())->toArray())->forceDelete(); // 删除操作必须保证插入成功才能删除
+                $totalArchived += $this->archivable()
+                    ->whereIn($this->getKeyName(), $data->pluck($this->getKeyName())->toArray())
+                    ->forceDelete();
+
+                if ($onChunkArchived) {
+                    $onChunkArchived($data->count());
+                }
             }
         }
-        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=1;'); // 还原
+
+        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=1;');
 
         event(new ModelsArchived(static::class, $totalArchived));
 
         return $totalArchived;
     }
-
 
     /**
      * 归档当前model
@@ -127,6 +140,7 @@ trait MonthlyArchivable
     {
         $archiveTableName = $this->getDestinationTableByDate(Carbon::parse($this->${$this->getDateField()}));
         $this->makeSureDestinationTableExists($archiveTableName);
+
         return $this->getArchiveDB()->table($archiveTableName)->insertOrIgnore($this->attributes);
     }
 }

@@ -2,134 +2,197 @@
 
 namespace Nexusbrother\Archivable\Tests;
 
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Nexusbrother\Archivable\ArchivableTableStructureSync;
 use Nexusbrother\Archivable\ModelsArchived;
-use Nexusbrother\Archivable\Tests\Models\MonthlyTestModel;
 use Nexusbrother\Archivable\Tests\Models\TestModel;
 use Nexusbrother\Archivable\Tests\Models\UserModel;
-use Nexusbrother\Archivable\Tests\Models\UserMonthlyModel;
 
 class ArchiveTest extends TestCase
 {
-    use ArchivableTableStructureSync, RefreshDatabase;
+    use ArchivableTableStructureSync;
 
-    private function getConnectionName()
+    private function getConnectionName(): string
     {
         return config('database.default');
     }
 
     /** @test */
-    public function sync_archive_table_structure()
+    public function sync_archive_table_structure(): void
     {
         $testModel = new TestModel;
 
-        Artisan::call('model:archive-structure-sync --model=' . str_replace('\\', '\\\\', get_class($testModel)));
+        Artisan::call('model:archive-structure-sync --model='.str_replace('\\', '\\\\', get_class($testModel)));
 
-        $this->assertEmpty($this->getStructureDiff($testModel->getSourceTable(), $testModel->getDestinationTable()), '归档表结构与模型结构不一致');
+        $this->assertEmpty(
+            $this->getStructureDiff($testModel->getSourceTable(), $testModel->getDestinationTable()),
+            '归档表结构与模型结构不一致'
+        );
     }
 
-    /**
-     * @test
-     *
-     * @depends sync_archive_table_structure
-     */
-    public function no_need_archive_any_data()
+    /** @test */
+    public function no_need_archive_any_data(): void
     {
-        // 准备测试数据
         $data = [
-            ['name' => 'fake data', 'created_at' => now()->subMonths(1), 'data' => json_encode(['key' => 'value'])],
-            ['name' => 'fake data', 'created_at' => now()->subMonths(1), 'data' => json_encode(['key' => 'value'])],
+            ['name' => 'recent data', 'created_at' => now()->subMonths(1), 'data' => json_encode(['key' => 'value'])],
+            ['name' => 'recent data', 'created_at' => now()->subMonths(1), 'data' => json_encode(['key' => 'value'])],
         ];
 
         TestModel::insert($data);
 
-        // 执行备份
-        $archiveModel    = new TestModel;
-        $needBackupCount = $archiveModel->archivable()->count();
-        $this->assertEquals($needBackupCount, 0, '备份数据数量与模型数量不一致');
-        $archiveModel->archiveAll();
-        // 验证备份数据
-        $this->assertDatabaseCount($archiveModel->getTable(), count: count($data));
+        $archiveModel = new TestModel;
+
+        $this->assertEquals(0, $archiveModel->archivable()->count(), '不应有可归档的数据');
+
+        $archived = $archiveModel->archiveAll();
+
+        $this->assertEquals(0, $archived, '归档条数应为 0');
+        $this->assertDatabaseCount($archiveModel->getTable(), count($data));
     }
 
-    /**
-     * @test
-     *
-     * @depends sync_archive_table_structure
-     */
-    public function need_archive_some_data()
+    /** @test */
+    public function archive_moves_data_to_archive_table(): void
     {
-        $eventBackedUp = 0;
-        Event::listen(ModelsArchived::class, function (ModelsArchived $event) use (&$eventBackedUp) {
-            $eventBackedUp += $event->count;
-        });
+        Event::fake(ModelsArchived::class);
 
         $archiveModel = new TestModel;
 
-        // 准备测试数据
-        $backupDataCount = 0;
-        $data            = [
-            [
-                'name'       => 'fake data',
-                'created_at' => now(),
-                'data'       => json_encode(['key' => 'value']),
-            ],
+        // 准备测试数据：1 条近期 + 10 条可归档
+        $recentData = [
+            ['name' => 'recent', 'created_at' => now(), 'data' => json_encode(['key' => 'value'])],
         ];
-        for ($i = 0; $i < 10000; $i++) {
-            $c      = now()->startOfMonth()->subMonths(6)->addSeconds($i);
-            $data[] = [
-                'name'       => 'fake data' . $i,
-                'created_at' => $c,
-                'data'       => json_encode(['key' => 'value']),
+        $archivableData = [];
+        for ($i = 0; $i < 10; $i++) {
+            $archivableData[] = [
+                'name' => 'old data '.$i,
+                'created_at' => now()->startOfMonth()->subMonths(6)->addSeconds($i),
+                'data' => json_encode(['key' => 'value']),
             ];
-            $backupDataCount++;
         }
 
-        foreach (array_chunk($data, 2000) as $chunkData) {
-            TestModel::insert($chunkData);
-        }
+        TestModel::insert(array_merge($recentData, $archivableData));
 
-        // 执行备份
-        $needBackupCount = $archiveModel->archivable()->count();
-        $this->assertEquals($backupDataCount, $needBackupCount, '备份数据数量与模型数量不一致');
-        $archiveModel->archiveAll();
+        $this->assertEquals(10, $archiveModel->archivable()->count(), '可归档数量应为 10');
 
-        // 验证备份数据
-        $this->assertEquals(1, TestModel::count(), '无需备份的数据数量不一致');
-        $totalBackedUp = DB::connection(config('archive.db'))->table($archiveModel->getDestinationTable())->count();
-        // 验证备份数据
-        $this->assertEquals($backupDataCount, $totalBackedUp, '实际备份数量不一致');
-        $this->assertEquals($backupDataCount, $eventBackedUp, '备份数据数量与事件数量不一致');
+        $archived = $archiveModel->archiveAll();
+
+        $this->assertEquals(10, $archived, '实际归档条数应为 10');
+        $this->assertEquals(1, TestModel::count(), '源表应只剩 1 条');
+
+        $archivedCount = DB::connection(config('archive.db'))
+            ->table($archiveModel->getDestinationTable())
+            ->count();
+        $this->assertEquals(10, $archivedCount, '归档表应有 10 条数据');
+
+        Event::assertDispatched(ModelsArchived::class, function ($event) {
+            return $event->count === 10;
+        });
     }
 
-    /**
-     * @test
-     *
-     * @depends sync_archive_table_structure
-     */
-    public function test_fk_archivable()
+    /** @test */
+    public function archive_respects_chunk_size(): void
     {
+        $archiveModel = new TestModel;
 
-        // 准备测试数据
-        TestModel::insert(['name' => 'fake data', 'created_at' => now()->subMonths(7), 'data' => json_encode(['key' => 'value'])]);
+        // 插入 5 条可归档数据，chunk 设为 2
+        $data = [];
+        for ($i = 0; $i < 5; $i++) {
+            $data[] = [
+                'name' => 'chunk test '.$i,
+                'created_at' => now()->subMonths(7),
+                'data' => null,
+            ];
+        }
+        TestModel::insert($data);
+
+        $chunkCount = 0;
+        $onChunk = function (int $count) use (&$chunkCount) {
+            $chunkCount++;
+        };
+
+        $archived = $archiveModel->archiveAll(2, $onChunk);
+
+        $this->assertEquals(5, $archived);
+        // chunk=2, 5 条数据应分 3 批 (2+2+1)
+        $this->assertEquals(3, $chunkCount, '应分 3 批处理');
+    }
+
+    /** @test */
+    public function callbacks_are_invoked(): void
+    {
+        $archiveModel = new TestModel;
+
+        $data = [];
+        for ($i = 0; $i < 3; $i++) {
+            $data[] = [
+                'name' => 'callback test '.$i,
+                'created_at' => now()->subMonths(7),
+                'data' => null,
+            ];
+        }
+        TestModel::insert($data);
+
+        $startCalled = false;
+        $startTotal = 0;
+        $chunkTotal = 0;
+
+        $onStart = function (int $total) use (&$startCalled, &$startTotal) {
+            $startCalled = true;
+            $startTotal = $total;
+        };
+
+        $onChunk = function (int $count) use (&$chunkTotal) {
+            $chunkTotal += $count;
+        };
+
+        $archived = $archiveModel->archiveAll(1000, $onChunk, $onStart);
+
+        $this->assertTrue($startCalled, 'onStart 回调应被调用');
+        $this->assertEquals(3, $startTotal, 'onStart 应收到总数 3');
+        $this->assertEquals(3, $chunkTotal, 'onChunk 累计应为 3');
+        $this->assertEquals(3, $archived);
+    }
+
+    /** @test */
+    public function archive_with_zero_records_returns_early(): void
+    {
+        $archiveModel = new TestModel;
+
+        $startCalled = false;
+        $chunkCalled = false;
+
+        $archived = $archiveModel->archiveAll(
+            null,
+            function () use (&$chunkCalled) {
+                $chunkCalled = true;
+            },
+            function () use (&$startCalled) {
+                $startCalled = true;
+            }
+        );
+
+        $this->assertEquals(0, $archived);
+        $this->assertFalse($startCalled, '无数据时 onStart 不应被调用');
+        $this->assertFalse($chunkCalled, '无数据时 onChunk 不应被调用');
+    }
+
+    /** @test */
+    public function fk_constraints_do_not_block_archive(): void
+    {
+        TestModel::insert([
+            'name' => 'fk test', 'created_at' => now()->subMonths(7), 'data' => null,
+        ]);
 
         $testModel = TestModel::first();
 
-        $userMonthlyTestModel = new UserModel([
-            'test_model_id' => $testModel->id,
-        ]);
+        (new UserModel(['test_model_id' => $testModel->id]))->save();
 
-        $userMonthlyTestModel->save();
+        $this->assertEquals(1, $testModel->archivable()->count());
 
-        // 执行备份
-        $needBackupCount = $testModel->archivable()->count();
-        $this->assertEquals($needBackupCount, 1, '备份数据数量与模型数量不一致');
         $testModel->archiveAll();
-        // 验证备份数据
-        $this->assertDatabaseCount($testModel->getTable(), count: 0);
+
+        $this->assertDatabaseCount($testModel->getTable(), 0);
     }
 }

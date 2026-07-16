@@ -3,13 +3,9 @@
 namespace Nexusbrother\Archivable\Console;
 
 use Illuminate\Contracts\Events\Dispatcher;
-use Nexusbrother\Archivable\ArchivableTableStructureSync;
-use Nexusbrother\Archivable\ModelsArchived;
 
 class TableStructureSyncCommand extends ArchiveCommand
 {
-    use ArchivableTableStructureSync;
-
     /**
      * The console command name.
      *
@@ -24,7 +20,7 @@ class TableStructureSyncCommand extends ArchiveCommand
      *
      * @var string
      */
-    protected $description = 'Archive models that are no longer needed';
+    protected $description = 'Sync archive table structures from source models';
 
     /**
      * Execute the console command.
@@ -36,7 +32,7 @@ class TableStructureSyncCommand extends ArchiveCommand
         $models = $this->models();
 
         if ($models->isEmpty()) {
-            $this->output->info('No archiveAble models found.');
+            $this->components->info('No archiveAble models found.');
 
             return;
         }
@@ -45,7 +41,5 @@ class TableStructureSyncCommand extends ArchiveCommand
             $model = new $model;
             $model->syncStructure($this->output);
         });
-
-        $events->forget(ModelsArchived::class);
     }
 }

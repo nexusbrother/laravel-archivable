@@ -2,7 +2,7 @@
 
 namespace Nexusbrother\Archivable;
 
-use Illuminate\Support\Facades\DB;
+use Closure;
 use LogicException;
 
 trait Archivable
@@ -10,15 +10,13 @@ trait Archivable
     use ArchivableTableStructureSync;
 
     /**
-     * @param $destinationTable
-     *
-     * @return void
+     * 确保目标归档表存在，不存在则创建，已存在则同步结构差异。
      */
-    public function makeSureDestinationTableExists($destinationTable)
+    public function makeSureDestinationTableExists(string $destinationTable): void
     {
         if ($this->getArchiveSchema()->hasTable($destinationTable)) {
             $diff = $this->getStructureDiff($this->getSourceTable(), $destinationTable);
-            if (!empty($diff)) {
+            if (! empty($diff)) {
                 $this->applyDiff($destinationTable, $diff);
             }
         } else {
@@ -27,33 +25,51 @@ trait Archivable
     }
 
     /**
-     * archive all archivable models in the database.
+     * 归档所有符合条件的记录。
      *
-     * @return int
+     * @param  int|null  $chunkSize  每批处理条数，默认取配置值
+     * @param  \Closure|null  $onChunkArchived  每批完成后的回调，签名：function(int $chunkCount): void
+     * @param  \Closure|null  $onStart  开始归档前的回调，签名：function(int $total): void
+     * @return int 实际归档条数
      *
      * @throws \Throwable
      */
-    public function archiveAll(?int $chunkSize = null)
+    public function archiveAll(?int $chunkSize = null, ?Closure $onChunkArchived = null, ?Closure $onStart = null)
     {
         $chunkSize = $chunkSize ?? config('archive.default_chunk_size');
-        $total     = $this->archivable()->count();
+        $total = $this->archivable()->count();
         if ($total == 0) {
             return 0;
         }
+
         $archiveTableName = $this->getDestinationTable();
         $this->makeSureDestinationTableExists($archiveTableName);
 
-        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=0;'); // 禁用外健检查
+        if ($onStart) {
+            $onStart($total);
+        }
+
+        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=0;');
         $totalArchived = 0;
+
         while (true) {
             $data = $this->archivable()->limit($chunkSize)->get();
             if ($data->isEmpty()) {
                 break;
             }
-            $this->getArchiveDB()->table($this->getDestinationTable())->insertOrIgnore($data->map->getAttributes()->all());
-            $totalArchived += $this->archivable()->whereIn($this->getKeyName(), $data->pluck($this->getKeyName())->toArray())->forceDelete();
+
+            $this->getArchiveDB()->table($archiveTableName)->insertOrIgnore($data->map->getAttributes()->all());
+            $deletedCount = $this->archivable()
+                ->whereIn($this->getKeyName(), $data->pluck($this->getKeyName())->toArray())
+                ->forceDelete();
+            $totalArchived += $deletedCount;
+
+            if ($onChunkArchived) {
+                $onChunkArchived($data->count());
+            }
         }
-        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=1;'); // 还原
+
+        $this->getSourceDB()->statement('SET FOREIGN_KEY_CHECKS=1;');
 
         event(new ModelsArchived(static::class, $totalArchived));
 
@@ -61,7 +77,7 @@ trait Archivable
     }
 
     /**
-     * Get the archivable model query.
+     * 获取可归档记录的查询构造器。
      *
      * @return \Illuminate\Database\Eloquent\Builder
      */
@@ -71,14 +87,12 @@ trait Archivable
     }
 
     /**
-     * backup the model in the database.
+     * 归档当前模型实例到归档表。
      *
      * @return bool|null
      */
     public function archive()
     {
-        $archiveTableName = $this->getTable();
-
-        return $this->getArchiveDB()->table($archiveTableName)->insertOrIgnore($this->attributes);
+        return $this->getArchiveDB()->table($this->getTable())->insertOrIgnore($this->attributes);
     }
 }

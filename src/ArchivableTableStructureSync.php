@@ -13,15 +13,15 @@ trait ArchivableTableStructureSync
      */
     protected function sourceTableExists(string $table): bool
     {
-        $db        = $this->getSourceDB();
-        $prefix    = $db->getTablePrefix();
-        $fullTable = $prefix . $table;
+        $db = $this->getSourceDB();
+        $prefix = $db->getTablePrefix();
+        $fullTable = $prefix.$table;
 
         // 使用字符串拼接构建SHOW TABLES LIKE语句
         // 需要注意在SHOW TABLES LIKE后使用单引号包围表名
         $result = $db->select("SHOW TABLES LIKE '$fullTable'");
 
-        return !empty($result);
+        return ! empty($result);
     }
 
     /**
@@ -29,15 +29,15 @@ trait ArchivableTableStructureSync
      */
     protected function destinationTableExists(): bool
     {
-        $db        = $this->getArchiveDB();
-        $prefix    = $db->getTablePrefix();
-        $fullTable = $prefix . $this->getDestinationTable();
+        $db = $this->getArchiveDB();
+        $prefix = $db->getTablePrefix();
+        $fullTable = $prefix.$this->getDestinationTable();
 
         // 使用字符串拼接构建SHOW TABLES LIKE语句
         // 需要注意在SHOW TABLES LIKE后使用单引号包围表名
         $result = $db->select("SHOW TABLES LIKE '$fullTable'");
 
-        return !empty($result);
+        return ! empty($result);
     }
 
     /**
@@ -54,7 +54,7 @@ trait ArchivableTableStructureSync
         // 清理多余的逗号和空白字符
         $createSql = preg_replace('/,\s*\)/', ')', $createSql);
 
-        $createSql = str_replace('CREATE TABLE `' . $sourceTable, 'CREATE TABLE `' . $destinationTable, $createSql);
+        $createSql = str_replace('CREATE TABLE `'.$sourceTable, 'CREATE TABLE `'.$destinationTable, $createSql);
         // 确保SQL以分号结尾
         if (substr(trim($createSql), -1) !== ';') {
             $createSql .= ';';
@@ -75,13 +75,13 @@ trait ArchivableTableStructureSync
 
         // 1. 检查目标表是否缺少字段
         foreach ($sourceColumns as $colName => $sourceCol) {
-            if (!isset($targetColumns[$colName])) {
+            if (! isset($targetColumns[$colName])) {
                 // 目标表缺少字段 → 新增字段（包含 nullable 约束）
                 $diff[] = $this->buildAddColumnSql($colName, $sourceCol);
             } else {
                 // 字段存在 → 检查类型、nullable 等差异
                 $targetCol = $targetColumns[$colName];
-                $hasDiff   = false;
+                $hasDiff = false;
 
                 // 检查字段类型差异
                 if ($targetCol['type'] !== $sourceCol['type']) {
@@ -105,26 +105,26 @@ trait ArchivableTableStructureSync
             }
         }
 
-        // 3. 检查目标表是否有多余字段（可选：是否删除，默认不删除）
+        // 2. 检查目标表是否有多余字段（可选：是否删除，默认不删除）
         foreach ($targetColumns as $colName => $targetCol) {
-            if (!isset($sourceColumns[$colName])) {
+            if (! isset($sourceColumns[$colName])) {
                 // 谨慎：删除字段会丢失数据，默认只记录不执行
                 $diff[] = [
-                    'type'    => 'drop_column',
-                    'sql'     => "DROP COLUMN `{$colName}`",
+                    'type' => 'drop_column',
+                    'sql' => "DROP COLUMN `{$colName}`",
                     'warning' => '删除字段可能导致数据丢失，默认不执行',
                 ];
             }
         }
 
-        // 4. 对比索引差异（简化版，可扩展）
+        // 3. 对比索引差异
         $sourceIndexes = $this->getTableIndexes($this->getSourceDBConnectionName(), $sourceTable);
         $targetIndexes = $this->getTableIndexes($this->getArchiveDBConnectionName(), $destinationTable);
         foreach ($sourceIndexes as $indexName => $sourceIndex) {
-            if (!isset($targetIndexes[$indexName])) {
+            if (! isset($targetIndexes[$indexName])) {
                 $diff[] = [
                     'type' => 'add_index',
-                    'sql'  => $sourceIndex['sql'],
+                    'sql' => $sourceIndex['sql'],
                 ];
             }
         }
@@ -138,13 +138,13 @@ trait ArchivableTableStructureSync
     protected function getTableColumns(?string $conn, string $table): array
     {
         $columns = [];
-        $rows    = DB::connection($conn)->select("DESCRIBE `{$table}`");
+        $rows = DB::connection($conn)->select("DESCRIBE `{$table}`");
         foreach ($rows as $row) {
             $columns[$row->Field] = [
-                'type'    => $row->Type, // 如 'int(11)', 'varchar(255)'
-                'null'    => $row->Null === 'YES',
+                'type' => $row->Type, // 如 'int(11)', 'varchar(255)'
+                'null' => $row->Null === 'YES',
                 'default' => $row->Default,
-                'extra'   => $row->Extra,
+                'extra' => $row->Extra,
             ];
         }
 
@@ -157,7 +157,7 @@ trait ArchivableTableStructureSync
     protected function getTableIndexes(?string $conn, string $table): array
     {
         $indexes = [];
-        $rows    = DB::connection($conn)->select("SHOW INDEX FROM `{$table}`");
+        $rows = DB::connection($conn)->select("SHOW INDEX FROM `{$table}`");
         foreach ($rows as $row) {
             if (
                 $row->Key_name === 'PRIMARY' ||
@@ -170,7 +170,7 @@ trait ArchivableTableStructureSync
             } // 主键通常在创建表时已处理
             $indexes[$row->Key_name] = [
                 'columns' => $row->Column_name,
-                'sql'     => "ADD INDEX `{$row->Key_name}` (`{$row->Column_name}`)",
+                'sql' => "ADD INDEX `{$row->Key_name}` (`{$row->Column_name}`)",
             ];
         }
 
@@ -193,50 +193,43 @@ trait ArchivableTableStructureSync
     }
 
     /**
-     * 生成新增字段的 SQL（包含 nullable 约束）
+     * 构建字段定义（类型 + NULL 约束 + 默认值 + 自增）。
      */
-    protected function buildAddColumnSql(string $colName, array $sourceCol): array
+    protected function buildColumnDefinition(array $sourceCol): string
     {
-        // 构建字段定义（包含 NOT NULL 或 NULL）
         $columnDef = $sourceCol['type'];
         $columnDef .= $sourceCol['null'] ? ' NULL' : ' NOT NULL';
 
-        // 处理默认值（如需要）
         if ($sourceCol['default'] !== null) {
             $columnDef .= " DEFAULT '{$sourceCol['default']}'";
         }
 
-        // 处理自增（如需要）
         if (str_contains($sourceCol['extra'], 'auto_increment')) {
             $columnDef .= ' AUTO_INCREMENT';
         }
 
+        return $columnDef;
+    }
+
+    /**
+     * 生成新增字段的 SQL。
+     */
+    protected function buildAddColumnSql(string $colName, array $sourceCol): array
+    {
         return [
             'type' => 'add_column',
-            'sql'  => "ADD COLUMN `{$colName}` {$columnDef}",
+            'sql' => "ADD COLUMN `{$colName}` {$this->buildColumnDefinition($sourceCol)}",
         ];
     }
 
     /**
-     * 生成修改字段的 SQL（包含 nullable 约束）
+     * 生成修改字段的 SQL。
      */
     protected function buildModifyColumnSql(string $colName, array $sourceCol): array
     {
-        // 逻辑同新增字段，确保 nullable 状态被正确应用
-        $columnDef = $sourceCol['type'];
-        $columnDef .= $sourceCol['null'] ? ' NULL' : ' NOT NULL';
-
-        if ($sourceCol['default'] !== null) {
-            $columnDef .= " DEFAULT '{$sourceCol['default']}'";
-        }
-
-        if (str_contains($sourceCol['extra'], 'auto_increment')) {
-            $columnDef .= ' AUTO_INCREMENT';
-        }
-
         return [
             'type' => 'modify_column',
-            'sql'  => "MODIFY COLUMN `{$colName}` {$columnDef}",
+            'sql' => "MODIFY COLUMN `{$colName}` {$this->buildColumnDefinition($sourceCol)}",
         ];
     }
 
@@ -254,21 +247,20 @@ trait ArchivableTableStructureSync
     }
 
     /**
-     * @param \Illuminate\Console\OutputStyle|null $output
-     *
+     * @param  \Illuminate\Console\OutputStyle|null  $output
      * @return void
      */
     public function syncStructure($output = null)
     {
         // 1. 检查原表是否存在
-        if (!$this->sourceTableExists($this->getSourceTable())) {
+        if (! $this->sourceTableExists($this->getSourceTable())) {
             $output?->error("原库不存在表: {$this->getSourceTable()}");
 
             return;
         }
 
         // 2. 目标表不存在 → 直接创建
-        if (!$this->destinationTableExists()) {
+        if (! $this->destinationTableExists()) {
             $this->createTable($this->getSourceTable(), $this->getDestinationTable());
             $output?->success("成功创建表: {$this->getDestinationTable()}");
 
@@ -285,6 +277,6 @@ trait ArchivableTableStructureSync
 
         // 4. 执行差异更新
         $this->applyDiff($this->getDestinationTable(), $diff);
-        $output?->success("成功更新表结构: {$this->getDestinationTable()}（差异数: " . count($diff) . '）');
+        $output?->success("成功更新表结构: {$this->getDestinationTable()}（差异数: ".count($diff).'）');
     }
 }

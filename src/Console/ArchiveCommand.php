@@ -6,9 +6,10 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
-use Symfony\Component\Finder\Finder;
 use Nexusbrother\Archivable\Archivable;
 use Nexusbrother\Archivable\ModelsArchived;
+use Symfony\Component\Console\Helper\ProgressBar;
+use Symfony\Component\Finder\Finder;
 
 class ArchiveCommand extends Command
 {
@@ -53,18 +54,9 @@ class ArchiveCommand extends Command
             return;
         }
 
-        $archiving = [];
-
-        $events->listen(ModelsArchived::class, function ($event) use (&$archiving) {
-            if (!in_array($event->model, $archiving)) {
-                $archiving[] = $event->model;
-
-                $this->newLine();
-
-                $this->components->info(sprintf('archiving [%s] records.', $event->model));
-            }
-
-            $this->components->twoColumnDetail($event->model, "{$event->count} records");
+        $events->listen(ModelsArchived::class, function ($event) {
+            $this->newLine();
+            $this->components->info("Archived [{$event->model}] complete: {$event->count} records.");
         });
 
         $models->each(function ($model) {
@@ -82,14 +74,31 @@ class ArchiveCommand extends Command
     protected function archiveModel(string $model)
     {
         $instance = new $model;
-
         $chunkSize = property_exists($instance, 'archivableChunkSize')
             ? $instance->archivableChunkSize
             : $this->option('chunk');
+        $progressBar = null;
+        $output = $this->output;
+
+        $onStart = function (int $total) use ($output, &$progressBar) {
+            $this->newLine();
+            $progressBar = new ProgressBar($output, $total);
+            $progressBar->setFormat(' %current%/%max% [%bar%] %percent:3s%%');
+            $progressBar->setBarCharacter('▓');
+            $progressBar->setEmptyBarCharacter('░');
+            $progressBar->setProgressCharacter('▓');
+            $progressBar->start();
+        };
+
+        $onChunk = function (int $count) use (&$progressBar) {
+            $progressBar?->advance($count);
+        };
 
         $total = $this->isArchivable($model)
-            ? $instance->archiveAll($chunkSize)
+            ? $instance->archiveAll($chunkSize, $onChunk, $onStart)
             : 0;
+
+        $progressBar?->finish();
 
         if ($total == 0) {
             $this->components->info("No Archivable [$model] records found.");
@@ -103,7 +112,7 @@ class ArchiveCommand extends Command
      */
     protected function models()
     {
-        if (!empty($models = $this->option('model'))) {
+        if (! empty($models = $this->option('model'))) {
             return collect($models)->filter(function ($model) {
                 return class_exists($model);
             })->values();
@@ -111,7 +120,7 @@ class ArchiveCommand extends Command
 
         $except = $this->option('except');
 
-        if (!empty($models) && !empty($except)) {
+        if (! empty($models) && ! empty($except)) {
             throw new InvalidArgumentException('The --models and --except options cannot be combined.');
         }
 
@@ -119,12 +128,12 @@ class ArchiveCommand extends Command
             ->map(function ($model) {
                 $namespace = $this->laravel->getNamespace();
 
-                return $namespace . str_replace(
+                return $namespace.str_replace(
                     ['/', '.php'],
                     ['\\', ''],
-                    Str::after($model->getRealPath(), realpath(app_path()) . DIRECTORY_SEPARATOR)
+                    Str::after($model->getRealPath(), realpath(app_path()).DIRECTORY_SEPARATOR)
                 );
-            })->when(!empty($except), function ($models) use ($except) {
+            })->when(! empty($except), function ($models) use ($except) {
                 return $models->reject(function ($model) use ($except) {
                     return in_array($model, $except);
                 });
@@ -157,7 +166,7 @@ class ArchiveCommand extends Command
 
         $usedArchivable = array_intersect([Archivable::class], $uses);
 
-        return !empty($usedArchivable);
+        return ! empty($usedArchivable);
     }
 
     /**
